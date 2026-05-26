@@ -195,7 +195,7 @@ async def ticket_first_message(message: Message, state: FSMContext) -> None:
     await state.clear()
 
 
-@router.message(F.text | F.photo | F.video | F.document)
+@router.message(F.text & ~F.text.startswith("/") | F.photo | F.video | F.document)
 async def active_ticket_stream(message: Message, state: FSMContext) -> None:
     if (message.text or "") in MENU_TEXTS:
         return

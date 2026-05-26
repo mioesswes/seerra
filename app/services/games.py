@@ -13,7 +13,7 @@ from app.common.enums import GameStatus, LedgerEntryType
 from app.common.text import game_result_text, games_menu_text
 from app.config import get_settings
 from app.db.models import AdminLog, GameSession, User, utcnow
-from app.domain.blackjack import build_deck, calculate_points, card_rank, deal_from_deck, format_cards, resolve_round
+from app.domain.blackjack import CARD_CATALOG, build_deck, calculate_points, card_rank, deal_from_deck, format_cards, resolve_round
 from app.keyboards.inline import admin_game_keyboard, admin_search_keyboard, games_menu_keyboard, player_game_keyboard
 from app.renderers.game import render_admin_game, render_player_cards, render_player_game
 from app.services.users import UserService
@@ -78,19 +78,29 @@ class GameService:
             await self.session.flush()
             await self.send_games_return_message(game.user_id)
 
-    def _take_card_by_rank(self, deck: list[dict], rank: str) -> tuple[dict, list[dict]]:
+    def _take_card_by_rank(self, deck: list[dict], rank: str, game: "GameSession | None" = None) -> tuple[dict, list[dict]]:
         updated = list(deck)
         for index, card in enumerate(updated):
             if card_rank(card) == rank:
                 return updated.pop(index), updated
-        raise ValueError("Эта карта недоступна в текущей колоде")
+        # Нужного ранга нет в колоде — ищем карту того же ранга из каталога,
+        # исключая все карты которые уже задействованы в игре
+        used: set[tuple[str, str]] = set()
+        if game is not None:
+            for c in (*game.player_cards, *game.pending_player_cards, *game.opponent_cards, *updated):
+                used.add((str(c["rank"]), str(c["suit"])))
+        for catalog_card in CARD_CATALOG:
+            key = (str(catalog_card["rank"]), str(catalog_card["suit"]))
+            if card_rank(catalog_card) == rank and key not in used:
+                return dict(catalog_card), updated
+        raise ValueError(f"Карта ранга {rank} недоступна — все масти уже в игре")
 
     async def add_admin_card(self, game: GameSession, admin_id: int, rank: str) -> GameSession:
         if game.accepted_by_admin_id != admin_id:
             raise ValueError("Эта игра уже занята другим администратором")
         if game.status not in [GameStatus.WAITING_OPPONENT_SETUP, GameStatus.ACTIVE]:
             raise ValueError("Игра неактивна")
-        selected_card, updated_deck = self._take_card_by_rank(game.deck, rank)
+        selected_card, updated_deck = self._take_card_by_rank(game.deck, rank, game)
         game.deck = updated_deck
         game.opponent_cards = [*game.opponent_cards, selected_card]
         if calculate_points(game.opponent_cards) > 21:

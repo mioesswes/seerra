@@ -26,7 +26,7 @@ async def background_game_worker(bot: Bot) -> None:
                 await service.process_timeouts()
                 result = await session.scalars(
                     select(GameSession).where(
-                        GameSession.status.in_([GameStatus.WAITING_OPPONENT_SETUP, GameStatus.ACTIVE])
+                        GameSession.status == GameStatus.ACTIVE
                     )
                 )
                 for game in list(result):

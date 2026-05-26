@@ -85,9 +85,9 @@ def admin_game_keyboard(game_id: str, locked: bool = False) -> InlineKeyboardMar
                 InlineKeyboardButton(text="9", callback_data=f"admincard:{game_id}:9"),
                 InlineKeyboardButton(text="8", callback_data=f"admincard:{game_id}:8"),
                 InlineKeyboardButton(text="7", callback_data=f"admincard:{game_id}:7"),
-                InlineKeyboardButton(text="6", callback_data=f"admincard:{game_id}:6"),
             ],
             [
+                InlineKeyboardButton(text="6", callback_data=f"admincard:{game_id}:6"),
                 InlineKeyboardButton(text="5", callback_data=f"admincard:{game_id}:5"),
                 InlineKeyboardButton(text="4", callback_data=f"admincard:{game_id}:4"),
                 InlineKeyboardButton(text="3", callback_data=f"admincard:{game_id}:3"),

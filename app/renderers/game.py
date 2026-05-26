@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app.domain.blackjack import calculate_points, card_admin_label, format_cards, hidden_cards
 
@@ -8,7 +8,7 @@ from app.domain.blackjack import calculate_points, card_admin_label, format_card
 def _seconds_left(deadline: datetime | None) -> int:
     if not deadline:
         return 0
-    delta = int((deadline - datetime.now(timezone.utc)).total_seconds())
+    delta = int((deadline - datetime.utcnow()).total_seconds())
     return max(delta, 0)
 
 
