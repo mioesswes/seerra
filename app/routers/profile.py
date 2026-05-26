@@ -3,56 +3,54 @@ from __future__ import annotations
 from pathlib import Path
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from app.common.text import profile_text
 from app.config import get_settings
 from app.db.session import SessionLocal
-from app.keyboards.inline import profile_cover_keyboard, profile_keyboard
+from app.keyboards.inline import profile_keyboard
 from app.services.users import UserService
 
 router = Router()
 
 
-async def _send_profile(message: Message) -> None:
+async def _send_profile(from_user_id: int, from_user_username: str | None, from_user_first_name: str | None, target: Message) -> None:
     settings = get_settings()
     async with SessionLocal() as session:
         users = UserService(session)
-        user = await users.get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        user = await users.get_or_create_user(from_user_id, from_user_username, from_user_first_name)
         wallet = await users.get_wallet(user.id)
         stats = await users.stats(user.id)
         await session.commit()
 
+    text = profile_text(from_user_username or "", from_user_id, wallet.balance_stars, stats)
+
     if Path(settings.profile_image_path).exists():
-        await message.answer_photo(FSInputFile(settings.profile_image_path), reply_markup=profile_cover_keyboard())
-    await message.answer(
-        profile_text(message.from_user.username or "", message.from_user.id, wallet.balance_stars, stats),
-        reply_markup=profile_keyboard(),
-    )
+        await target.answer_photo(
+            FSInputFile(settings.profile_image_path),
+            caption=text,
+            reply_markup=profile_keyboard(),
+        )
+    else:
+        await target.answer(text, reply_markup=profile_keyboard())
 
 
 @router.message(F.text == "👤 Профиль")
 async def profile_menu(message: Message) -> None:
-    await _send_profile(message)
+    await _send_profile(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        message,
+    )
 
 
 @router.callback_query(F.data == "profile:open")
 async def profile_callback(callback: CallbackQuery) -> None:
-    await _send_profile(callback.message)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "profile:refresh_media")
-async def profile_refresh_media(callback: CallbackQuery) -> None:
-    settings = get_settings()
-    if not callback.message:
-        await callback.answer()
-        return
-    if not Path(settings.profile_image_path).exists():
-        await callback.answer("Файл profile.jpg не найден", show_alert=True)
-        return
-    await callback.message.edit_media(
-        media=InputMediaPhoto(media=FSInputFile(settings.profile_image_path)),
-        reply_markup=profile_cover_keyboard(),
+    await _send_profile(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.first_name,
+        callback.message,
     )
-    await callback.answer("Обложка обновлена")
+    await callback.answer()
