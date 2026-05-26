@@ -155,7 +155,6 @@ class GameService:
             cards, deck = deal_from_deck(game.deck, preview_fill)
             game.pending_player_cards = [*game.pending_player_cards, *cards]
             game.deck = deck
-        game.player_deadline_at = utcnow() + timedelta(minutes=1)
         if calculate_points(game.player_cards) > 21:
             game.player_stopped = True
         await self.session.flush()
@@ -166,7 +165,6 @@ class GameService:
         if game.status != GameStatus.ACTIVE:
             raise ValueError("Игра недоступна")
         game.player_stopped = True
-        game.player_deadline_at = utcnow() + timedelta(minutes=1)
         await self.session.flush()
         await self.check_game_resolution(game)
         return game
@@ -175,7 +173,6 @@ class GameService:
         if game.accepted_by_admin_id != admin_id:
             raise ValueError("Игра уже закреплена за другим администратором")
         game.opponent_stopped = True
-        game.admin_deadline_at = utcnow() + timedelta(minutes=1)
         await self.session.flush()
         await self.check_game_resolution(game)
         return game
@@ -275,7 +272,20 @@ class GameService:
     async def render_game_views(self, game: GameSession) -> None:
         user = await self.session.scalar(select(User).where(User.id == game.user_id))
         if game.status == GameStatus.ACTIVE:
-            await self.safe_send_or_edit_player_main(game, render_player_game(game), player_game_keyboard(game.id))
+            if game.player_stopped:
+                player_pts = calculate_points(game.player_cards)
+                opp_count = len(game.opponent_cards) or 2
+                await self.safe_send_or_edit_player_main(
+                    game,
+                    "<b>BLACK JACK ONLINE</b>\n\n"
+                    f"У соперника: {' '.join(['🃏'] * opp_count)}\n"
+                    f"Время: <b>{self._render_clock(game.player_deadline_at)}</b>\n"
+                    f"Счёт: <b>{player_pts}</b>\n\n"
+                    "✋ <b>Стенд</b> — ждём ход соперника...",
+                    None,
+                )
+            else:
+                await self.safe_send_or_edit_player_main(game, render_player_game(game), player_game_keyboard(game.id))
             await self.safe_send_or_edit_player_cards(game, render_player_cards(game))
 
         if game.admin_chat_message_id:
@@ -285,6 +295,15 @@ class GameService:
                 render_admin_game(game, user.username if user else None),
                 admin_game_keyboard(game.id) if game.status == GameStatus.ACTIVE else None,
             )
+
+    def _render_clock(self, deadline) -> str:
+        from datetime import datetime
+        if not deadline:
+            return "00:00"
+        delta = int((deadline - datetime.utcnow()).total_seconds())
+        delta = max(delta, 0)
+        m, s = divmod(delta, 60)
+        return f"{m:02d}:{s:02d}"
 
     async def safe_send_or_edit_player_main(
         self,
