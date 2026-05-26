@@ -26,7 +26,9 @@ class Settings(BaseSettings):
 
     @field_validator("admin_ids", mode="before")
     @classmethod
-    def parse_admin_ids(cls, value: str | list[int]) -> list[int]:
+    def parse_admin_ids(cls, value: str | list[int] | int) -> list[int]:
+        if isinstance(value, int):
+            return [value]
         if isinstance(value, list):
             return value
         if not value:
