@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import select
@@ -52,24 +53,38 @@ class GameService:
         await self.session.flush()
 
     async def accept_game(self, game: GameSession, admin_id: int) -> GameSession:
+        """
+        Принятие игры. Раздаёт карты игроку и сразу 2 случайные карты админу,
+        игра сразу переходит в ACTIVE — без этапа WAITING_OPPONENT_SETUP.
+        """
         if game.status != GameStatus.SEARCHING:
             raise ValueError("Игра уже недоступна")
         now = utcnow()
         game.accepted_by_admin_id = admin_id
-        game.status = GameStatus.WAITING_OPPONENT_SETUP
-        game.admin_deadline_at = now + timedelta(minutes=1)
-        game.player_deadline_at = None
+        game.status = GameStatus.ACTIVE
+
+        # Карты игрока
         player_cards, deck = deal_from_deck(game.deck, 2)
         preview_cards, deck = deal_from_deck(deck, min(5, len(deck)))
         game.deck = deck
         game.player_cards = player_cards
         game.pending_player_cards = preview_cards
-        await self.session.flush()
-        await self._resolve_player_natural_after_deal(game)
-        return game
 
-    async def _resolve_player_natural_after_deal(self, game: GameSession) -> None:
-        if len(game.player_cards) == 2 and sum(1 for card in game.player_cards if card_rank(card) == "A") == 2:
+        # Сразу 2 случайные карты админу
+        opponent_cards, deck = deal_from_deck(deck, 2)
+        game.deck = deck
+        game.opponent_cards = opponent_cards
+
+        game.player_deadline_at = now + timedelta(minutes=1)
+        game.admin_deadline_at = now + timedelta(minutes=1)
+
+        if calculate_points(game.opponent_cards) > 21:
+            game.opponent_stopped = True
+
+        await self.session.flush()
+
+        # Проверяем натуральный блэкджек у игрока (2 туза)
+        if len(game.player_cards) == 2 and sum(1 for c in game.player_cards if card_rank(c) == "A") == 2:
             game.status = GameStatus.PLAYER_WON
             await self.users.add_balance(game.user_id, game.stake * 2, LedgerEntryType.WIN, "Победа в BLACK JACK")
             await self.session.flush()
@@ -77,14 +92,25 @@ class GameService:
             game.status = GameStatus.FINISHED
             await self.session.flush()
             await self.send_games_return_message(game.user_id)
+            return game
+
+        # Проверяем натуральный блэкджек у админа (2 туза)
+        if len(game.opponent_cards) == 2 and sum(1 for c in game.opponent_cards if card_rank(c) == "A") == 2:
+            game.status = GameStatus.PLAYER_LOST
+            await self.session.flush()
+            await self.finish_notifications(game, "Поражение")
+            game.status = GameStatus.FINISHED
+            await self.session.flush()
+            await self.send_games_return_message(game.user_id)
+            return game
+
+        return game
 
     def _take_card_by_rank(self, deck: list[dict], rank: str, game: "GameSession | None" = None) -> tuple[dict, list[dict]]:
         updated = list(deck)
         for index, card in enumerate(updated):
             if card_rank(card) == rank:
                 return updated.pop(index), updated
-        # Нужного ранга нет в колоде — ищем карту того же ранга из каталога,
-        # исключая все карты которые уже задействованы в игре
         used: set[tuple[str, str]] = set()
         if game is not None:
             for c in (*game.player_cards, *game.pending_player_cards, *game.opponent_cards, *updated):
@@ -98,18 +124,14 @@ class GameService:
     async def add_admin_card(self, game: GameSession, admin_id: int, rank: str) -> GameSession:
         if game.accepted_by_admin_id != admin_id:
             raise ValueError("Эта игра уже занята другим администратором")
-        if game.status not in [GameStatus.WAITING_OPPONENT_SETUP, GameStatus.ACTIVE]:
+        if game.status != GameStatus.ACTIVE:
             raise ValueError("Игра неактивна")
         selected_card, updated_deck = self._take_card_by_rank(game.deck, rank, game)
         game.deck = updated_deck
         game.opponent_cards = [*game.opponent_cards, selected_card]
         if calculate_points(game.opponent_cards) > 21:
             game.opponent_stopped = True
-        if game.status == GameStatus.WAITING_OPPONENT_SETUP and len(game.opponent_cards) >= 2:
-            now = utcnow()
-            game.status = GameStatus.ACTIVE
-            game.player_deadline_at = now + timedelta(minutes=1)
-            game.admin_deadline_at = now + timedelta(minutes=1)
+        game.admin_deadline_at = utcnow() + timedelta(minutes=1)
         await self.session.flush()
         await self.check_game_resolution(game)
         return game
@@ -176,17 +198,20 @@ class GameService:
             game.deck = build_deck()
             player_cards, deck = deal_from_deck(game.deck, 2)
             preview_cards, deck = deal_from_deck(deck, min(5, len(deck)))
+            # Сразу 2 случайные карты админу на переигровку тоже
+            opponent_cards, deck = deal_from_deck(deck, 2)
             game.deck = deck
             game.player_cards = player_cards
-            game.opponent_cards = []
+            game.opponent_cards = opponent_cards
             game.pending_player_cards = preview_cards
             game.player_stopped = False
             game.opponent_stopped = False
-            game.status = GameStatus.WAITING_OPPONENT_SETUP
+            game.status = GameStatus.ACTIVE
             game.admin_deadline_at = now + timedelta(minutes=1)
-            game.player_deadline_at = None
+            game.player_deadline_at = now + timedelta(minutes=1)
+            if calculate_points(game.opponent_cards) > 21:
+                game.opponent_stopped = True
             await self.session.flush()
-            await self._resolve_player_natural_after_deal(game)
             return
 
         if result.winner == "player":
@@ -212,15 +237,25 @@ class GameService:
             game_result_text(title, player_points, opponent_points, player_cards, opponent_cards),
             None,
         )
+        # Финальное обновление карточного сообщения — редактируем если есть, иначе удаляем
         if game.user_cards_message_id:
             user = await self.session.scalar(select(User).where(User.id == game.user_id))
             if user:
-                await self.safe_edit_message(
+                edited = await self.safe_edit_message(
                     user.telegram_id,
                     game.user_cards_message_id,
                     f"Ваши карты: {player_cards}\nКарты соперника: {opponent_cards}",
                     None,
                 )
+                if not edited:
+                    try:
+                        await self.bot.send_message(
+                            user.telegram_id,
+                            f"Ваши карты: {player_cards}\nКарты соперника: {opponent_cards}",
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception:
+                        pass
         await send_admin_log(
             self.bot,
             f"🎯 Результат игры\n\nID: {game.id}\nСтавка: {game.stake} ⭐\nИтог: {title}\nСчет игрока: {player_points}\nСчет стола: {opponent_points}",
@@ -239,13 +274,7 @@ class GameService:
 
     async def render_game_views(self, game: GameSession) -> None:
         user = await self.session.scalar(select(User).where(User.id == game.user_id))
-        if game.status == GameStatus.WAITING_OPPONENT_SETUP:
-            await self.safe_send_or_edit_player_main(
-                game,
-                "<b>BLACK JACK ONLINE</b>\n\nИгра найдена. Подготовка игрового стола...",
-                None,
-            )
-        elif game.status == GameStatus.ACTIVE:
+        if game.status == GameStatus.ACTIVE:
             await self.safe_send_or_edit_player_main(game, render_player_game(game), player_game_keyboard(game.id))
             await self.safe_send_or_edit_player_cards(game, render_player_cards(game))
 
@@ -254,7 +283,7 @@ class GameService:
                 self.settings.admin_chat_id,
                 game.admin_chat_message_id,
                 render_admin_game(game, user.username if user else None),
-                admin_game_keyboard(game.id) if game.status in [GameStatus.WAITING_OPPONENT_SETUP, GameStatus.ACTIVE] else None,
+                admin_game_keyboard(game.id) if game.status == GameStatus.ACTIVE else None,
             )
 
     async def safe_send_or_edit_player_main(
@@ -269,7 +298,7 @@ class GameService:
         if game.user_main_message_id:
             if await self.safe_edit_message(user.telegram_id, game.user_main_message_id, text, reply_markup):
                 return
-        message = await self.bot.send_message(user.telegram_id, text, reply_markup=reply_markup)
+        message = await self.bot.send_message(user.telegram_id, text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         game.user_main_message_id = message.message_id
         await self.session.flush()
 
@@ -278,9 +307,10 @@ class GameService:
         if not user:
             return
         if game.user_cards_message_id:
-            if await self.safe_edit_message(user.telegram_id, game.user_cards_message_id, text, None):
-                return
-        message = await self.bot.send_message(user.telegram_id, text)
+            # Пробуем редактировать — если не вышло, НЕ шлём новое (избегаем спама)
+            await self.safe_edit_message(user.telegram_id, game.user_cards_message_id, text, None)
+            return
+        message = await self.bot.send_message(user.telegram_id, text, parse_mode=ParseMode.HTML)
         game.user_cards_message_id = message.message_id
         await self.session.flush()
 
@@ -292,7 +322,13 @@ class GameService:
         reply_markup: InlineKeyboardMarkup | None,
     ) -> bool:
         try:
-            await self.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=reply_markup)
+            await self.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML,
+            )
             return True
         except TelegramBadRequest:
             return False
@@ -300,7 +336,7 @@ class GameService:
     async def process_timeouts(self) -> None:
         games = await self.session.scalars(
             select(GameSession).where(
-                GameSession.status.in_([GameStatus.SEARCHING, GameStatus.WAITING_OPPONENT_SETUP, GameStatus.ACTIVE])
+                GameSession.status.in_([GameStatus.SEARCHING, GameStatus.ACTIVE])
             )
         )
         now = utcnow()
@@ -313,7 +349,7 @@ class GameService:
                     None,
                 )
                 await self.send_games_return_message(game.user_id)
-            elif game.status in [GameStatus.WAITING_OPPONENT_SETUP, GameStatus.ACTIVE]:
+            elif game.status == GameStatus.ACTIVE:
                 if game.player_deadline_at and game.player_deadline_at <= now and not game.player_stopped:
                     game.status = GameStatus.PLAYER_LOST
                     await self.finish_notifications(game, "Поражение")
