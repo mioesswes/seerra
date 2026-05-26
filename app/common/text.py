@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from app.config import Settings
 
-
 MAIN_MENU_TEXT = (
     "<b>Добро пожаловать в BJOKER</b>\n\n"
     "Премиальный стол, быстрые действия, динамичные экраны и игра в стиле dark casino."
 )
-
 
 HELP_TEXT = (
     "<b>BLACK JACK ONLINE</b>\n\n"
@@ -25,24 +23,34 @@ HELP_TEXT = (
 )
 
 
-def premium(value: str, emoji_id: str | None = None, fallback: str = "⭐") -> str:
-    if not emoji_id:
-        return f"{fallback} {value}".strip()
-    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>{value}'
+def premium(emoji_id: str, fallback: str, text: str = "") -> str:
+    """Обёртка для premium tg-emoji."""
+    tag = f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+    return f"{tag} {text}".strip() if text else tag
+
+
+# ── Premium emoji IDs ──────────────────────────────────────────────────────────
+_E_PROFILE   = "5417915203100613993"   # 👤
+_E_ID        = "5368324170671202286"   # 🪪
+_E_BALANCE   = "5447644880824181073"   # ⭐
+_E_STATS     = "5440539497383087970"   # 📊
+_E_GAMES     = "5441499466327715830"   # 🎮
+_E_WIN       = "5445284980978621387"   # 💰
+_E_BET       = "5441367794639626656"   # 🎯
+_E_STAR      = "5447644880824181073"   # ⭐  (inline)
 
 
 def profile_text(username: str, telegram_id: int, balance: int, stats: dict[str, int]) -> str:
     name = f"@{username}" if username else "без username"
     return (
-        "<b>Профиль игрока</b>\n\n"
-        f"Пользователь: {name}\n"
-        f"ID: <code>{telegram_id}</code>\n"
-        f"Баланс: <b>{balance} ⭐</b>\n\n"
-        "<b>Статистика игр</b>\n"
-        f"Всего игр: {stats['games_total']}\n"
-        f"Общий выигрыш: {stats['gross_wins']} ⭐\n"
-        f"Максимальный выигрыш: {stats['max_win']} ⭐\n"
-        f"Максимальная ставка: {stats['max_bet']} ⭐"
+        f"{premium(_E_PROFILE, '👤')} <b>Профиль:</b> {name}\n"
+        f"{premium(_E_ID, '🪪')} <b>ID:</b> <code>{telegram_id}</code>\n"
+        f"{premium(_E_BALANCE, '⭐')} <b>Баланс:</b> <b>{balance}</b> {premium(_E_STAR, '⭐')}\n\n"
+        f"{premium(_E_STATS, '📊')} <b>Статистика игр</b>\n"
+        f"Всего игр: <b>{stats['games_total']}</b>\n"
+        f"Общий выигрыш: <b>{stats['gross_wins']}</b> {premium(_E_WIN, '💰')}\n"
+        f"Максимальный выигрыш: <b>{stats['max_win']}</b> {premium(_E_WIN, '💰')}\n"
+        f"Максимальная ставка: <b>{stats['max_bet']}</b> {premium(_E_BET, '🎯')}"
     )
 
 

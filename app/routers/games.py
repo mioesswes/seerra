@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.common.locks import game_action_locks
 from app.common.text import game_search_text, games_menu_text
-from app.config import get_settings
+
 from app.db.models import GameSession
 from app.db.session import SessionLocal
 from app.keyboards.inline import games_menu_keyboard, player_game_keyboard, processing_keyboard, searching_keyboard, stake_keyboard
@@ -16,15 +16,16 @@ from app.services.users import UserService
 router = Router()
 
 
+GAMES_STICKER_ID = "CAACAgIAAxkBAAFKqQVqFRGr-jMQOxnwcBGHerX4fCu7RgACD5UAAm8HqUjdhbdcgRfCsTsE"
+
+
 async def _games_menu(message: Message, stake: int | None = None) -> None:
-    settings = get_settings()
     async with SessionLocal() as session:
         users = UserService(session)
         user = await users.get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
         wallet = await users.get_wallet(user.id)
         await session.commit()
-    if settings.games_sticker_file_id:
-        await message.answer_sticker(settings.games_sticker_file_id)
+    await message.answer_sticker(GAMES_STICKER_ID)
     await message.answer(games_menu_text(wallet.balance_stars, stake), reply_markup=games_menu_keyboard())
 
 
@@ -101,7 +102,6 @@ async def cancel_search(callback: CallbackQuery) -> None:
 async def player_hit(callback: CallbackQuery) -> None:
     game_id = callback.data.split(":")[2]
     async with game_action_locks.get(f"game:{game_id}"):
-        await callback.message.edit_reply_markup(reply_markup=player_game_keyboard(game_id, locked=True))
         async with SessionLocal() as session:
             service = GameService(session, callback.bot)
             game = await session.scalar(select(GameSession).where(GameSession.id == game_id))
@@ -123,7 +123,6 @@ async def player_hit(callback: CallbackQuery) -> None:
 async def player_stop(callback: CallbackQuery) -> None:
     game_id = callback.data.split(":")[2]
     async with game_action_locks.get(f"game:{game_id}"):
-        await callback.message.edit_reply_markup(reply_markup=player_game_keyboard(game_id, locked=True))
         async with SessionLocal() as session:
             service = GameService(session, callback.bot)
             game = await session.scalar(select(GameSession).where(GameSession.id == game_id))

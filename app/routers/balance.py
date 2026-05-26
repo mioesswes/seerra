@@ -42,7 +42,12 @@ async def balance_menu(message: Message) -> None:
 
 @router.callback_query(F.data == "balance:open")
 async def balance_open(callback: CallbackQuery) -> None:
-    await _balance_message(callback.message)
+    async with SessionLocal() as session:
+        users = UserService(session)
+        user = await users.get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.first_name)
+        wallet = await users.get_wallet(user.id)
+        await session.commit()
+    await callback.message.answer(balance_text(wallet.balance_stars), reply_markup=balance_keyboard())
     await callback.answer()
 
 

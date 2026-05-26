@@ -140,7 +140,6 @@ async def admin_card(callback: CallbackQuery) -> None:
         return
     _, game_id, value = callback.data.split(":")
     async with game_action_locks.get(f"game:{game_id}"):
-        await callback.message.edit_reply_markup(reply_markup=admin_game_keyboard(game_id, locked=True))
         async with SessionLocal() as session:
             service = GameService(session, callback.bot)
             game = await session.scalar(select(GameSession).where(GameSession.id == game_id))
@@ -152,7 +151,6 @@ async def admin_card(callback: CallbackQuery) -> None:
                 await service.log_admin_action(callback.from_user.id, "add_card", f"{game.id}:{value}")
                 await service.render_game_views(game)
             except ValueError as exc:
-                await callback.message.edit_reply_markup(reply_markup=admin_game_keyboard(game_id))
                 await callback.answer(str(exc), show_alert=True)
                 await session.rollback()
                 return
@@ -167,7 +165,6 @@ async def admin_stop(callback: CallbackQuery) -> None:
         return
     game_id = callback.data.split(":")[1]
     async with game_action_locks.get(f"game:{game_id}"):
-        await callback.message.edit_reply_markup(reply_markup=admin_game_keyboard(game_id, locked=True))
         async with SessionLocal() as session:
             service = GameService(session, callback.bot)
             game = await session.scalar(select(GameSession).where(GameSession.id == game_id))
