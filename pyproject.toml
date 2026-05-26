@@ -1,0 +1,21 @@
+[project]
+name = "bjoker"
+version = "0.1.0"
+description = "BJOKER Telegram casino-style bot built with aiogram 3"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram>=3.28.2,<3.29",
+    "sqlalchemy>=2.0.36",
+    "aiosqlite>=0.20.0",
+    "pydantic>=2.9.2",
+    "pydantic-settings>=2.6.1",
+]
+
+[project.optional-dependencies]
+postgres = [
+    "asyncpg>=0.29.0",
+]
+
+[tool.setuptools]
+py-modules = []
